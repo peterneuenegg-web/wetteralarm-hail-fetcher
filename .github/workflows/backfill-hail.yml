@@ -1,0 +1,73 @@
+name: backfill-hail
+
+# Manuell triggerbarer Workflow, der das STAC-14-Tage-Rolling-Fenster
+# (oder einen Teil davon) abklappert und alle noch nicht ingesteten Frames
+# in die Schaden-DB lädt.
+#
+# Re-Run ist sicher: schon vorhandene Frames werden übersprungen (Idempotenz
+# via /api/hail-ingest.php?check=…). Wenn MAX_FRAMES erreicht wird, einfach
+# nochmal triggern — der Worker macht beim ersten nicht-ingesteten Frame weiter.
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Ziel-Umgebung"
+        required: true
+        default: "stage"
+        type: choice
+        options:
+          - stage
+          - production
+      lookback_minutes:
+        description: "Lookback in Minuten (1440 = 1 Tag, 10080 = 7 Tage, 20160 = 14 Tage Max)"
+        required: true
+        default: "1440"
+      max_frames:
+        description: "Max. Anzahl Frames pro Run (Sicherheitsnetz; leer = unbegrenzt)"
+        required: false
+        default: "500"
+      poh_threshold:
+        description: "POH-Schwellwert (% — nur Pixel >= diesem Wert werden gespeichert)"
+        required: true
+        default: "10"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # GitHub-Limit ist 360 (6h), Puffer für Cleanup
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Backfill (stage)
+        if: github.event.inputs.target == 'stage'
+        env:
+          INGEST_URL: ${{ secrets.STAGE_INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.STAGE_INGEST_TOKEN }}
+          POH_THRESHOLD: ${{ github.event.inputs.poh_threshold }}
+          LOOKBACK_MINUTES: ${{ github.event.inputs.lookback_minutes }}
+          MAX_FRAMES: ${{ github.event.inputs.max_frames }}
+          SKIP_SEASON_CHECK: "true"
+        run: python fetch_hail.py
+
+      - name: Backfill (production)
+        if: github.event.inputs.target == 'production'
+        env:
+          INGEST_URL: ${{ secrets.PROD_INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.PROD_INGEST_TOKEN }}
+          POH_THRESHOLD: ${{ github.event.inputs.poh_threshold }}
+          LOOKBACK_MINUTES: ${{ github.event.inputs.lookback_minutes }}
+          MAX_FRAMES: ${{ github.event.inputs.max_frames }}
+          SKIP_SEASON_CHECK: "true"
+        run: python fetch_hail.py

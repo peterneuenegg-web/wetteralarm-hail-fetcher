@@ -50,6 +50,22 @@ LOOKBACK_MINUTES=30 \
 python fetch_hail.py
 ```
 
+## Backfill
+
+Use the `backfill-hail` workflow to load older frames from the STAC 14-day
+rolling window. Triggered manually from **Actions → backfill-hail → Run workflow**.
+
+Inputs:
+
+- **target** — `stage` or `production`
+- **lookback_minutes** — how far back to look (1440 = 1 day, 10080 = 7 days,
+  20160 = 14 days, the STAC max)
+- **max_frames** — safety cap per run (default 500). Re-run to continue from
+  where the previous run stopped (idempotent via the `?check=` endpoint).
+- **poh_threshold** — same semantics as the regular worker
+
+Re-running the same backfill is safe: already-ingested frames are skipped.
+
 ## Tuning
 
 - `POH_THRESHOLD` — minimum POH value (%) kept per pixel. Default 10. Lower

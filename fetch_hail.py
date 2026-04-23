@@ -323,16 +323,23 @@ def main() -> int:
     token = require_env("INGEST_TOKEN")
     threshold = int(os.environ.get("POH_THRESHOLD", "10"))
     lookback = int(os.environ.get("LOOKBACK_MINUTES", "30"))
+    max_frames_env = os.environ.get("MAX_FRAMES", "").strip()
+    max_frames = int(max_frames_env) if max_frames_env else None
+    skip_season_check = os.environ.get("SKIP_SEASON_CHECK", "").strip().lower() in {"1", "true", "yes"}
 
-    if not is_in_season():
+    if not skip_season_check and not is_in_season():
         log.info("Outside hail season (April-September) — nothing to fetch.")
         return 0
 
-    log.info("Discovering frames (lookback=%d min, POH threshold=%d)", lookback, threshold)
+    log.info(
+        "Discovering frames (lookback=%d min, POH threshold=%d, max_frames=%s)",
+        lookback, threshold, max_frames if max_frames else "unlimited",
+    )
     frames = discover_frames(lookback)
-    log.info("Found %d candidate frames", len(frames))
+    log.info("Found %d candidate frames in window", len(frames))
 
     any_error = False
+    processed = 0
     with tempfile.TemporaryDirectory(prefix="hail_") as tmpdir:
         tmp = Path(tmpdir)
         for frame in frames:
@@ -362,10 +369,19 @@ def main() -> int:
                 if frame.meshs_url:
                     (tmp / f"meshs_{frame.timestamp:%Y%m%d%H%M}.h5").unlink(missing_ok=True)
 
+                processed += 1
+                if max_frames is not None and processed >= max_frames:
+                    log.info(
+                        "Reached MAX_FRAMES=%d (of %d in window). Re-run to continue.",
+                        max_frames, len(frames),
+                    )
+                    break
+
             except Exception as e:
                 log.exception("Processing frame %s failed: %s", frame.timestamp, e)
                 any_error = True
 
+    log.info("Processed %d frames", processed)
     return 1 if any_error else 0
 
 
