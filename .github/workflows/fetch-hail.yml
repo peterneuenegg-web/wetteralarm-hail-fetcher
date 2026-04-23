@@ -1,5 +1,9 @@
 name: fetch-hail
 
+env:
+  # Actions auf Node 24 opten (Node 20 wird Juni 2026 entfernt)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   schedule:
     # Alle 5 Minuten. GitHub-Cron ist best-effort — ausserhalb der Saison
