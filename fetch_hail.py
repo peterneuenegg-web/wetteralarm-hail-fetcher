@@ -57,7 +57,8 @@ STAC_ITEMS_URL = (
 TRANSFORM_LV95_TO_WGS84 = Transformer.from_crs("EPSG:2056", "EPSG:4326", always_xy=True)
 
 FNAME_RE = re.compile(
-    r"^(?P<code>BZC|MZC)(?P<yy>\d{2})(?P<jjj>\d{3})(?P<hhmm>\d{4})"
+    r"^(?P<code>bzc|mzc)(?P<yy>\d{2})(?P<jjj>\d{3})(?P<hhmm>\d{4})",
+    re.IGNORECASE,
 )
 
 
@@ -97,32 +98,61 @@ def parse_fname_timestamp(fname: str) -> datetime | None:
 
 
 def discover_frames(lookback_minutes: int) -> list[FrameAssets]:
-    """Fragt STAC nach Items im Lookback-Fenster, gruppiert nach 5-Min-Slot."""
-    since = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
-    # STAC unterstützt datetime-Filter (ISO8601 Intervall)
-    params = {
-        "datetime": f"{since.isoformat().replace('+00:00', 'Z')}/..",
-        "limit": 100,
-    }
-    r = requests.get(STAC_ITEMS_URL, params=params, timeout=30)
-    r.raise_for_status()
-    data = r.json()
+    """
+    Fragt STAC alle Items ab (Collection hat eine 14-Tage-Rolling-Window) und
+    filtert die Assets per **Dateiname-Zeitstempel** auf das Lookback-Fenster.
 
+    Die Item-Property `datetime` ist hier der letzte Update-Zeitstempel des
+    Tages-Buckets, NICHT die Messzeit der 5-Min-Files — daher taugt sie nicht
+    als STAC-Filter.
+    """
+    since = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
     slots: dict[datetime, FrameAssets] = {}
-    for feat in data.get("features", []):
-        for asset_id, asset in (feat.get("assets") or {}).items():
-            href = asset.get("href", "")
-            if not href.lower().endswith(".h5"):
-                continue
-            fname = href.rsplit("/", 1)[-1]
-            ts = parse_fname_timestamp(fname)
-            if ts is None:
-                continue
-            slot = slots.setdefault(ts, FrameAssets(timestamp=ts))
-            if fname.startswith("BZC"):
-                slot.poh_url = href
-            elif fname.startswith("MZC"):
-                slot.meshs_url = href
+
+    url: str | None = STAC_ITEMS_URL
+    params: dict[str, str | int] | None = {"limit": 100}
+    total_items = 0
+    total_assets = 0
+
+    while url:
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+
+        for feat in data.get("features", []):
+            total_items += 1
+            for _asset_id, asset in (feat.get("assets") or {}).items():
+                href = asset.get("href", "")
+                if not href.lower().endswith(".h5"):
+                    continue
+                total_assets += 1
+                fname = href.rsplit("/", 1)[-1]
+                ts = parse_fname_timestamp(fname)
+                if ts is None or ts < since:
+                    continue
+
+                slot = slots.setdefault(ts, FrameAssets(timestamp=ts))
+                fname_lower = fname.lower()
+                if fname_lower.startswith("bzc"):
+                    slot.poh_url = href
+                elif fname_lower.startswith("mzc"):
+                    slot.meshs_url = href
+
+        # STAC-Pagination: follow next link, wenn vorhanden
+        next_link = next(
+            (lnk for lnk in (data.get("links") or []) if lnk.get("rel") == "next"),
+            None,
+        )
+        if next_link and next_link.get("href"):
+            url = next_link["href"]
+            params = None  # next-URL hat query-params bereits eingebaut
+        else:
+            url = None
+
+    log.info(
+        "Scanned %d items / %d h5-assets; %d slots in lookback window",
+        total_items, total_assets, len(slots),
+    )
 
     # Nur Frames, die mindestens POH haben (MESHS ist optional — kein Hagel ≥ 2 cm)
     return sorted(
