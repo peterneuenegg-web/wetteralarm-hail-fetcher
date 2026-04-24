@@ -185,13 +185,28 @@ def download(url: str, dest: Path) -> None:
                 fh.write(chunk)
 
 
+def _value_mask(arr: np.ndarray, sentinel: float) -> np.ndarray:
+    """
+    Liefert eine bool-Maske für Pixel die `sentinel` matchen.
+    NaN-safe: bei sentinel=NaN nutzt np.isnan() (weil NaN == NaN immer False ist).
+    """
+    if np.isnan(sentinel):
+        return np.isnan(arr)
+    return arr == sentinel
+
+
 def read_odim_raster(h5_path: Path) -> tuple[np.ndarray, dict]:
     """
-    Liest ODIM-HDF5: data2d array + geo-Metadaten (LL/UR corner WGS84).
+    Liest ODIM-HDF5: 2D-Array + geo-Metadaten.
 
-    Returns (data_array, meta) mit meta-keys: LL_lat, LL_lon, UR_lat, UR_lon,
-    xsize, ysize. Werte sind bereits skaliert (gain/offset angewandt),
-    nodata/undetect als np.nan.
+    MeteoSchweiz POH/MESHS-Files (verifiziert 2026-04-24):
+      - dtype: float64
+      - nodata: NaN (nicht 255 wie ODIM-Default)
+      - undetect: 0.0
+      - quantity: 'POH' resp. 'MESHS'
+
+    Returns (data_array, meta). Werte sind skaliert (gain/offset),
+    nodata-Pixel als np.nan, undetect bleibt 0.
     """
     debug = os.environ.get("DEBUG_PARSE", "").strip().lower() in {"1", "true", "yes"}
 
@@ -202,41 +217,39 @@ def read_odim_raster(h5_path: Path) -> tuple[np.ndarray, dict]:
                 if hasattr(f[k], "keys"):
                     log.info("    /%s keys: %s", k, list(f[k].keys()))
 
-        # ODIM 2.3 Composite: /dataset1/data1/data + /dataset1/data1/what
         arr = f["/dataset1/data1/data"][...]
         what = f["/dataset1/data1/what"].attrs
-        gain = float(what.get("gain", 1.0))
-        offset = float(what.get("offset", 0.0))
-        nodata = float(what.get("nodata", 255))
-        undetect = float(what.get("undetect", 0))
+        gain     = float(what.get("gain", 1.0))
+        offset   = float(what.get("offset", 0.0))
+        nodata   = float(what.get("nodata", float("nan")))
+        undetect = float(what.get("undetect", 0.0))
+
+        nodata_mask   = _value_mask(arr, nodata)
+        undetect_mask = _value_mask(arr, undetect)
+        valid_mask    = ~(nodata_mask | undetect_mask)
 
         if debug:
             log.info("--- /dataset1/data1/what attrs: %s", dict(what))
-            log.info("    Raw arr: shape=%s dtype=%s min=%s max=%s",
-                     arr.shape, arr.dtype, arr.min(), arr.max())
+            log.info("    Raw arr: shape=%s dtype=%s", arr.shape, arr.dtype)
             log.info("    gain=%s offset=%s nodata=%s undetect=%s", gain, offset, nodata, undetect)
-            non_zero = arr[(arr != int(nodata)) & (arr != int(undetect))]
-            if non_zero.size > 0:
-                log.info("    Non-zero/non-nodata raw values: count=%d min=%s max=%s mean=%.2f",
-                         non_zero.size, non_zero.min(), non_zero.max(), float(non_zero.mean()))
-                # Histogramm Top-Buckets
+            log.info("    Pixel-Counts: total=%d nodata=%d undetect=%d valid=%d",
+                     arr.size, int(nodata_mask.sum()), int(undetect_mask.sum()), int(valid_mask.sum()))
+
+            valid = arr[valid_mask]
+            if valid.size > 0:
+                log.info("    Valid raw: min=%.2f max=%.2f mean=%.2f",
+                         float(valid.min()), float(valid.max()), float(valid.mean()))
                 for lo, hi in [(0, 10), (10, 30), (30, 50), (50, 80), (80, 101)]:
-                    cnt = int(((non_zero >= lo) & (non_zero < hi)).sum())
+                    cnt = int(((valid >= lo) & (valid < hi)).sum())
                     if cnt > 0:
                         log.info("    raw bucket [%d, %d): %d pixels", lo, hi, cnt)
             else:
-                log.info("    Alle Werte sind nodata oder undetect")
+                log.info("    Komplett leerer Frame (alles nodata/undetect — typisch nachts)")
 
+        # gain/offset anwenden, dann Sentinel-Werte normalisieren
         data = arr.astype(np.float32) * gain + offset
-        data[arr == nodata] = np.nan
-        data[arr == undetect] = 0.0
-
-        if debug:
-            valid = data[~np.isnan(data)]
-            valid_nonzero = valid[valid > 0]
-            log.info("    Scaled data: valid_pixels=%d nonzero=%d max=%s",
-                     valid.size, valid_nonzero.size,
-                     float(valid_nonzero.max()) if valid_nonzero.size else "n/a")
+        data[nodata_mask]   = np.nan
+        data[undetect_mask] = 0.0
 
         where = f["/where"].attrs
         meta = {
