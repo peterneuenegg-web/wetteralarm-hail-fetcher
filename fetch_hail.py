@@ -297,12 +297,18 @@ def build_pixel_list(
     dx = (ur_e - ll_e) / xsize
     dy = (ur_n - ll_n) / ysize
 
+    # MeteoSchweiz POH/MESHS Skalierung (verifiziert via DEBUG_PARSE 2026-04-24):
+    #   POH:   Float 0.0-1.0    (ratio, NICHT %)        → ×100 für Prozent
+    #   MESHS: Float in mm      (z.B. 25 = 2.5 cm Korn) → /10 für cm
+    # Threshold ist in % (z.B. 10 = 10 %), darum hier Vergleich gegen poh*100.
+    poh_pct = poh * 100.0
+
     # ODIM-Raster-Konvention: Zeile 0 ist oberste Reihe (UR-Richtung), Spalte 0 links
-    rows, cols = np.where(poh >= threshold)
+    rows, cols = np.where(poh_pct >= threshold)
     pixels: list[dict] = []
     for r_idx, c_idx in zip(rows.tolist(), cols.tolist()):
-        poh_val = float(poh[r_idx, c_idx])
-        if np.isnan(poh_val):
+        p_val = float(poh_pct[r_idx, c_idx])
+        if np.isnan(p_val):
             continue
 
         # Pixel-Mittelpunkt in native CRS
@@ -312,19 +318,17 @@ def build_pixel_list(
 
         meshs_val = None
         if meshs is not None and meshs_meta is not None:
-            # Annahme: gleiches Grid wie POH (beides CH-Composite). Wenn nicht,
-            # ist der Index ungültig — dann None.
             if meshs.shape == poh.shape:
-                mv = meshs[r_idx, c_idx]
-                if not np.isnan(mv) and mv >= 2.0:
-                    meshs_val = round(float(mv), 1)
+                mv_mm = meshs[r_idx, c_idx]
+                if not np.isnan(mv_mm) and mv_mm >= 20.0:    # ≥ 2 cm = 20 mm
+                    meshs_val = round(float(mv_mm) / 10.0, 1)  # mm → cm
 
         pixels.append(
             {
                 "lat": round(lat, 5),
                 "lng": round(lon, 5),
-                "poh": int(round(poh_val)),
-                "meshs": meshs_val,
+                "poh": int(round(p_val)),    # 0-100 %
+                "meshs": meshs_val,          # cm (oder None bei < 2 cm)
             }
         )
     return pixels
