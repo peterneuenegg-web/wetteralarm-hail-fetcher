@@ -285,6 +285,8 @@ def build_pixel_list(
             poh_meta["xsize"], poh_meta["ysize"], xsize, ysize,
         )
 
+    debug = os.environ.get("DEBUG_PARSE", "").strip().lower() in {"1", "true", "yes"}
+
     # Projdef aus ODIM nutzen (LV03 oder LV95, je nach Datei)
     transformer = Transformer.from_crs(poh_meta["projdef"], "EPSG:4326", always_xy=True)
 
@@ -297,13 +299,24 @@ def build_pixel_list(
     dx = (ur_e - ll_e) / xsize
     dy = (ur_n - ll_n) / ysize
 
+    if debug:
+        log.info(
+            "    Geo-grid: LL=(%.4f,%.4f) UR=(%.4f,%.4f) WGS84 / native LL=(%.0f,%.0f) UR=(%.0f,%.0f)",
+            poh_meta["LL_lon"], poh_meta["LL_lat"], poh_meta["UR_lon"], poh_meta["UR_lat"],
+            ll_e, ll_n, ur_e, ur_n,
+        )
+        log.info("    dx=%.0f m, dy=%.0f m, projdef=%s", dx, dy, poh_meta["projdef"])
+
     # MeteoSchweiz POH/MESHS Skalierung (verifiziert via DEBUG_PARSE 2026-04-24):
     #   POH:   Float 0.0-1.0    (ratio, NICHT %)        → ×100 für Prozent
     #   MESHS: Float in mm      (z.B. 25 = 2.5 cm Korn) → /10 für cm
     # Threshold ist in % (z.B. 10 = 10 %), darum hier Vergleich gegen poh*100.
     poh_pct = poh * 100.0
 
-    # ODIM-Raster-Konvention: Zeile 0 ist oberste Reihe (UR-Richtung), Spalte 0 links
+    # MeteoSchweiz HDF5-Raster: Row 0 = UNTERSTE Zeile (südlich = niedriges Northing).
+    # Korrigiert nach Beobachtung 2026-04-24: vorher hatten wir Row 0 = oben angenommen
+    # (ODIM-Standard), aber MeteoSchweiz dreht die Y-Achse — Hagel im Norden landete
+    # bei uns im Tessin.
     rows, cols = np.where(poh_pct >= threshold)
     pixels: list[dict] = []
     for r_idx, c_idx in zip(rows.tolist(), cols.tolist()):
@@ -311,9 +324,9 @@ def build_pixel_list(
         if np.isnan(p_val):
             continue
 
-        # Pixel-Mittelpunkt in native CRS
+        # Pixel-Mittelpunkt in native CRS — Row 0 = unten, Row ysize-1 = oben
         east = ll_e + (c_idx + 0.5) * dx
-        north = ur_n - (r_idx + 0.5) * dy  # Oben-Links-Origin -> Y invertiert
+        north = ll_n + (r_idx + 0.5) * dy
         lon, lat = transformer.transform(east, north)
 
         meshs_val = None
