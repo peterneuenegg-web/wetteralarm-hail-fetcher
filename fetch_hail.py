@@ -387,7 +387,7 @@ def main() -> int:
     frames = discover_frames(lookback)
     log.info("Found %d candidate frames in window", len(frames))
 
-    any_error = False
+    error_count = 0
     processed = 0
     with tempfile.TemporaryDirectory(prefix="hail_") as tmpdir:
         tmp = Path(tmpdir)
@@ -411,7 +411,7 @@ def main() -> int:
                 log.info("%s: %d pixels >= POH %d", frame.timestamp, len(pixels), threshold)
 
                 if not ingest(ingest_url, token, frame.timestamp, pixels):
-                    any_error = True
+                    error_count += 1
 
                 # Cleanup, behalten nur wenig Plattenplatz pro Run
                 poh_file.unlink(missing_ok=True)
@@ -428,10 +428,18 @@ def main() -> int:
 
             except Exception as e:
                 log.exception("Processing frame %s failed: %s", frame.timestamp, e)
-                any_error = True
+                error_count += 1
 
-    log.info("Processed %d frames", processed)
-    return 1 if any_error else 0
+    log.info("Processed %d frames (%d errors)", processed, error_count)
+
+    # Exit-Code-Logik: nur fail wenn ALLE Frames gefailt sind oder die Fehlerquote
+    # hoch ist. Einzelne Frame-Errors (kaputtes HDF5, transient fail) sollen nicht
+    # den ganzen Run als FAILED markieren wenn der Rest sauber durchlief.
+    if processed == 0 and error_count > 0:
+        return 1   # Garnix funktioniert
+    if error_count > 0 and (error_count / max(1, processed + error_count)) > 0.2:
+        return 1   # Mehr als 20% Fehler -> ernsthaftes Problem
+    return 0
 
 
 if __name__ == "__main__":
