@@ -6,8 +6,11 @@ env:
 
 on:
   schedule:
-    # Alle 5 Minuten. GitHub-Cron ist best-effort — ausserhalb der Saison
-    # (Oktober-März) endet das Python-Script früh mit Exit 0.
+    # Alle 5 Minuten. GitHub-Cron ist best-effort — beobachtete Realität:
+    # nur alle 1-3 Stunden ein Run (Plattform-Last). Deshalb LOOKBACK_MINUTES
+    # auf 240 (4h) erhöht, damit auch grössere Lücken überdeckt werden.
+    # Ingest-Endpoint ist idempotent (`?check=…`) — Re-Submission kostet nichts.
+    # Ausserhalb der Saison (Oktober-März) endet das Python-Script früh.
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
@@ -41,7 +44,7 @@ jobs:
           INGEST_URL: ${{ secrets.STAGE_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.STAGE_INGEST_TOKEN }}
           POH_THRESHOLD: "10"
-          LOOKBACK_MINUTES: "30"
+          LOOKBACK_MINUTES: "240"
         run: python fetch_hail.py
 
       - name: Fetch (production)
@@ -55,5 +58,5 @@ jobs:
           INGEST_URL: ${{ secrets.PROD_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.PROD_INGEST_TOKEN }}
           POH_THRESHOLD: "10"
-          LOOKBACK_MINUTES: "30"
+          LOOKBACK_MINUTES: "240"
         run: python fetch_hail.py
