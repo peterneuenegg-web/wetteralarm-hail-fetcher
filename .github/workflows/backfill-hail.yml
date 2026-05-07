@@ -12,6 +12,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 on:
+  # Wöchentlicher Safety-Net-Backfill für Prod, Sonntag 04:30 UTC
+  # (= 06:30 CEST). Niedrige GitHub-Last → höhere Wahrscheinlichkeit, dass
+  # Schedule pünktlich anläuft. Lookback = 7 Tage (10'080 Min). Idempotent
+  # via /api/hail-ingest.php?check=… — schon ingestete Frames sind no-op.
+  schedule:
+    - cron: "30 4 * * 0"
   workflow_dispatch:
     inputs:
       target:
@@ -71,13 +77,16 @@ jobs:
         run: python fetch_hail.py
 
       - name: Backfill (production)
-        if: github.event.inputs.target == 'production'
+        # Manueller Trigger mit target=production ODER wöchentlicher Schedule.
+        # Schedule hat keine Inputs → Fallback-Defaults: 7-Tage-Lookback,
+        # POH-Schwellwert 10, max 2000 Frames pro Lauf.
+        if: github.event.inputs.target == 'production' || github.event_name == 'schedule'
         env:
           INGEST_URL: ${{ secrets.PROD_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.PROD_INGEST_TOKEN }}
-          POH_THRESHOLD: ${{ github.event.inputs.poh_threshold }}
-          LOOKBACK_MINUTES: ${{ github.event.inputs.lookback_minutes }}
-          MAX_FRAMES: ${{ github.event.inputs.max_frames }}
+          POH_THRESHOLD: ${{ github.event.inputs.poh_threshold || '10' }}
+          LOOKBACK_MINUTES: ${{ github.event.inputs.lookback_minutes || '10080' }}
+          MAX_FRAMES: ${{ github.event.inputs.max_frames || '2000' }}
           SKIP_SEASON_CHECK: "true"
-          DEBUG_PARSE: ${{ github.event.inputs.debug_parse }}
+          DEBUG_PARSE: ${{ github.event.inputs.debug_parse || 'false' }}
         run: python fetch_hail.py
