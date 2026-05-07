@@ -45,7 +45,12 @@ jobs:
         run: python fetch_hail.py
 
       - name: Fetch (production)
-        if: github.event.inputs.target == 'production'
+        # Bei Schedule-Trigger und bei manuellem Trigger mit target=production
+        # beschicken wir Prod. Stage wird oben bei jedem Schedule-Trigger
+        # ebenfalls bedient — beide Umgebungen bekommen die gleichen Pixel.
+        # `if: always()` würde auch bei Stage-Failure laufen — wir wollen
+        # explizit den Schedule-Pfad ODER die manuelle Prod-Wahl.
+        if: github.event_name == 'schedule' || github.event.inputs.target == 'production'
         env:
           INGEST_URL: ${{ secrets.PROD_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.PROD_INGEST_TOKEN }}
