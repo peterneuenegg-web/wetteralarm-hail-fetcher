@@ -69,6 +69,7 @@ jobs:
         env:
           INGEST_URL: ${{ secrets.STAGE_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.STAGE_INGEST_TOKEN }}
+          HEARTBEAT_URL: https://schaden.wetteralarm.ch/stage/api/external-heartbeat.php?job=fetch_hail
           POH_THRESHOLD: ${{ github.event.inputs.poh_threshold }}
           LOOKBACK_MINUTES: ${{ github.event.inputs.lookback_minutes }}
           MAX_FRAMES: ${{ github.event.inputs.max_frames }}
@@ -84,6 +85,7 @@ jobs:
         env:
           INGEST_URL: ${{ secrets.PROD_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.PROD_INGEST_TOKEN }}
+          HEARTBEAT_URL: https://schaden.wetteralarm.ch/api/external-heartbeat.php?job=fetch_hail
           POH_THRESHOLD: ${{ github.event.inputs.poh_threshold || '10' }}
           LOOKBACK_MINUTES: ${{ github.event.inputs.lookback_minutes || '10080' }}
           MAX_FRAMES: ${{ github.event.inputs.max_frames || '2000' }}

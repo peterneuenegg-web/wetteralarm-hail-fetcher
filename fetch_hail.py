@@ -375,12 +375,30 @@ def ingest(ingest_url: str, token: str, ts: datetime, pixels: list[dict]) -> boo
     return True
 
 
+def ping_heartbeat(heartbeat_url: str | None, token: str, status: str = "ok",
+                   message: str | None = None, duration_ms: int | None = None) -> None:
+    """
+    Pingt den Schaden-Watchdog an, dass der Worker gelaufen ist. Schluckt
+    eigene Fehler — der Heartbeat ist Diagnostik, kein kritischer Pfad.
+    """
+    if not heartbeat_url:
+        return
+    try:
+        params = {"token": token, "status": status}
+        if message: params["message"] = message[:200]
+        if duration_ms is not None: params["duration_ms"] = str(duration_ms)
+        requests.get(heartbeat_url, params=params, timeout=10)
+    except Exception as e:
+        log.warning("heartbeat ping failed: %s", e)
+
+
 def is_in_season(now: datetime | None = None) -> bool:
     now = now or datetime.now(timezone.utc)
     return 4 <= now.month <= 9
 
 
 def main() -> int:
+    started_at = datetime.now(timezone.utc)
     ingest_url = require_env("INGEST_URL")
     token = require_env("INGEST_TOKEN")
     threshold = int(os.environ.get("POH_THRESHOLD", "10"))
@@ -389,8 +407,16 @@ def main() -> int:
     max_frames = int(max_frames_env) if max_frames_env else None
     skip_season_check = os.environ.get("SKIP_SEASON_CHECK", "").strip().lower() in {"1", "true", "yes"}
 
+    # Heartbeat-URL — optional, am Ende immer angepingt (auch ausserhalb Saison)
+    heartbeat_url = os.environ.get("HEARTBEAT_URL", "").strip() or None
+
+    def _heartbeat(status: str, message: str | None = None) -> None:
+        elapsed_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+        ping_heartbeat(heartbeat_url, token, status=status, message=message, duration_ms=elapsed_ms)
+
     if not skip_season_check and not is_in_season():
         log.info("Outside hail season (April-September) — nothing to fetch.")
+        _heartbeat("ok", "out of season")
         return 0
 
     log.info(
@@ -448,10 +474,14 @@ def main() -> int:
     # Exit-Code-Logik: nur fail wenn ALLE Frames gefailt sind oder die Fehlerquote
     # hoch ist. Einzelne Frame-Errors (kaputtes HDF5, transient fail) sollen nicht
     # den ganzen Run als FAILED markieren wenn der Rest sauber durchlief.
+    summary = f"{processed} frames, {error_count} errors"
     if processed == 0 and error_count > 0:
+        _heartbeat("failed", summary)
         return 1   # Garnix funktioniert
     if error_count > 0 and (error_count / max(1, processed + error_count)) > 0.2:
+        _heartbeat("failed", summary)
         return 1   # Mehr als 20% Fehler -> ernsthaftes Problem
+    _heartbeat("ok", summary)
     return 0
 
 

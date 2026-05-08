@@ -43,6 +43,10 @@ jobs:
         env:
           INGEST_URL: ${{ secrets.STAGE_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.STAGE_INGEST_TOKEN }}
+          # Heartbeat-Endpoint im Schaden-Tool — wird mit dem Ingest-Token
+          # authentifiziert. Schreibt cron_heartbeats.last_success_at, damit
+          # check_heartbeats den GitHub-Worker im Monitoring sieht.
+          HEARTBEAT_URL: https://schaden.wetteralarm.ch/stage/api/external-heartbeat.php?job=fetch_hail
           POH_THRESHOLD: "10"
           LOOKBACK_MINUTES: "240"
         run: python fetch_hail.py
@@ -57,6 +61,7 @@ jobs:
         env:
           INGEST_URL: ${{ secrets.PROD_INGEST_URL }}
           INGEST_TOKEN: ${{ secrets.PROD_INGEST_TOKEN }}
+          HEARTBEAT_URL: https://schaden.wetteralarm.ch/api/external-heartbeat.php?job=fetch_hail
           POH_THRESHOLD: "10"
           LOOKBACK_MINUTES: "240"
         run: python fetch_hail.py
